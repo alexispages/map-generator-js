@@ -46,14 +46,14 @@ var cities_names = ["CityName1", "CityName2", "..."];
 
 The cities names are generated within the function *create_city_paths*. A prefix before the city name is added by choosing it randomly from the *cities_prefixies* variable. You can change the content of this variable if you want to add prefixes or if you want to make it less probable to have a prefix by adding blank prefixes.
 ```js
-var cities_prefixes= ["Prefix1", "Prefix2", "", "", "..."];
+var cities_prefixes = ["Prefix1", "Prefix2", "", "", "..."];
 ```
 
 <p align="right"><a href="#about">back to top ⬆️</a></p>
 
 ## Biome height property
 
-In order to ensure the consistency of the different biomes on the map, we used the [simplex-nois.js module](https://github.com/jwagner/simplex-noise.js) to generate noise in a consistent way. 
+In order to ensure the consistency of the different biomes on the map, we used the [simplex-noise.js module](https://github.com/jwagner/simplex-noise.js) to generate noise in a consistent way. 
 
 The parameters we have defined in the *Hex* class allow for small biome sizes and many variations in height (little distance between a water biome and a mountain biome).
 ```js
