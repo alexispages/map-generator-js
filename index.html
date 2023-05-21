@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <script src='node_modules/simplex-noise/simplex-noise.js'></script>
+  <meta charset="UTF-8" />
+  <title>Map</title>
+  <link rel="stylesheet" type="text/css" href="style.css" />
+</head>
+
+<body>
+  <canvas id="canvas-1" width="100" height="100" style="position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
+  <canvas id="canvas-2" width="100" height="100" style="position: absolute; left: 0; top: 0; z-index: 2;"></canvas>
+  <script type="text/javascript">
+
+    // Canvas for printing tiles
+    const canvas = document.getElementById("canvas-1");
+    const context = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight - 5;
+
+
+    // Canvas for pathfinding
+    const canvas2 = document.getElementById("canvas-2");
+    const context2 = canvas2.getContext('2d');
+    canvas2.width = window.innerWidth;
+    canvas2.height = window.innerHeight - 5;
+
+    var p_litle_city = 990; //probability of little city (range 990 - 994)
+    var p_average_city = 994; //probability of average city (range 994 -997)
+    var p_max_city = 997; // probability of big City (range 997 - 1000)
+
+
+    var simplex = new SimplexNoise(Math.random()); // this one is used to generate the height (plains, mountains, etc)
+    var simplex2 = new SimplexNoise(Math.random()); // this one is used to generate the humidity (biomes)
+
+
+    // Cities names (generated using https://www.samcodes.co.uk/project/markov-namegen/)
+    var cities_names = ["Csorore", "Newportwort", "Mcalls", "Independale", "Burgh", "Houstockton", "Chattlerock", "Palmbeach", "Huntsvillo", "Irvington", "Clearwateo", "Wichicago", "Fairiet", "Irvington", "Vallertonio", "Elmond",
+      "Delphia", "Mesquirrel", "LittleBrokepines", "Spring", "Garlanguage", "Manchorage", "Orangeles", "Edinburgh", "Mivallejo", "Gamemonte", "Gamemake", "Adena", "Synccharity", "Uniconv", "Fortcollide", "Objects", "Westvallen", "Crypton",
+      "Simivallen", "Nemerald", "Everest", "Winster", "Ester", "Bakerland"
+    ];
+    // Prefixes used for cities
+    var cities_prefixes= ["New","Fort","North","South","Saint","Los","","","","","",""];
+
+    const hex_size = 16.6;
+
+    // Our grid matrix containing the Hex
+    var mapgrid = [];
+
+    // An array containing the tiles marked as city
+    var cities_hex = [];
+
+    class Hex {
+      constructor(x, y, q, r, height) {
+
+        this.x = (x); // Pixel x,
+        this.y = (y); // Pixel y
+        this.q = q; // Grid column
+        this.r = r; // Grid row
+        this.s = -q - r; // Cubic third dimension
+        this.path = false; // Tell if the tile is part of the current path
+        this.height = Math.round((((simplex.noise2D(x / 1000, y / 1000)) + 1) / 2) * 100); // Tiles height tuning
+        this.humidity = Math.round((((simplex2.noise2D(x / 2000, y / 2000)) + 1) / 2) * 100); // Tiles humidity tuning
+        this.cities = 0; //0 No city, 1 small City, 2 average city, 3 Big city
+
+      }
+
+      // Print a hexagon (Not an image)
+      printhex() {
+        context2.beginPath();
+        context2.fillStyle = 'rgb(' + this.height + ',' + 0 + ',100)';
+        for (var i = 1; i <= 6; i++) {
+          var angle_deg = 60 * i;
+          var angle_rad = Math.PI / 180 * angle_deg;
+          var x_value = this.x + Math.cos(angle_rad) * (hex_size) + 100;
+          var y_value = this.y + Math.sin(angle_rad) * (hex_size) + 100;
+          context2.lineTo(x_value, y_value);
+        }
+        context2.closePath();
+        context2.fill();
+      }
+
+      // Prints an image given as index
+      print_hex_as_img(index_val) {
+        var x = this.x;
+        var y = this.y;
+        var img = new Image();
+        img.src = 'ressources/hextiles.png';
+
+        img.onload = function() {
+          context.drawImage(img, (32 * index_val) % 512, Math.floor(index_val / 16) * 48, 32, 48, Math.floor(x), Math.floor(y), 32, 48);
+        }
+      }
+
+      // Prints a name on the map (layer 2 canvas 2)
+      print_text(text) {
+        context2.textAlign = "center";
+        context2.fillStyle = "black";
+        context2.font = "bold 15px Arial";
+        context2.shadowBlur = 10;
+        context2.shadowColor = "#FFFFFF";
+        context2.fillText(text, this.x, this.y);
+        context2.shadowOffs = 0;
+      }
+
+      // Returns the neighbors by reading the matrix
+      getNeighbors(grid) {
+        let neighbors = [];
+
+        // Check that column on the left exists
+        if (grid[this.q + 1] != null) {
+          neighbors.push(
+            ...[
+              grid[this.q + 1][this.r + 0], // Right
+              grid[this.q + 1][this.r - 1], // Top Right
+            ]
+          );
+        }
+
+        // We already know this column exists
+        neighbors.push(
+          ...[
+            grid[this.q + 0][this.r + 1], // Bottom Right
+            grid[this.q + 0][this.r - 1], // Top Left
+          ]
+        );
+
+        // Check that column on the right exists
+        if (grid[this.q - 1] != null) {
+          neighbors.push(
+            ...[
+              grid[this.q - 1][this.r + 0], // Left
+              grid[this.q - 1][this.r - 1], // Bottom Left
+            ]
+          );
+        }
+
+        // Remove undefined ones
+        neighbors = neighbors.filter(Boolean);
+        return neighbors;
+      }
+
+      // Manhattan distance between 2 hex (Not used)
+      distance(target) {
+        return Math.max(Math.abs(this.q - target.q), Math.abs(this.r - target.r), Math.abs(this.s - target.s))
+      }
+
+    }
+
+    // Convert coordinates to pixel that can be represented on screen
+    function gridToPixelCoords(c, r) {
+      var x = hex_size * 3 / 2 * c
+      var y = hex_size * Math.sqrt(3) * (r + 0.5 * (c & 1))
+      var tab = [x, y]
+      return tab;
+    }
+
+
+    // Initialize the map
+    function createmap(grid, h, w) {
+      for (let i = 0; i < h; i++) {
+        grid.push([]);
+        for (let j = 0; j < w; j++) {
+          [x, y] = gridToPixelCoords(i, j);
+          grid[i].push(new Hex(x, y, i, j));
+        }
+      }
+    }
+
+    // Prints the map (Using conditions)
+    function printmap(mapgrid) {
+      for (col of mapgrid) {
+        for (hex of col) {
+          var p_city = Math.round(Math.random() * 1000);
+
+          if (hex.height < 26) { //----------------------// Water
+            hex.print_hex_as_img(84);
+          } else if (hex.height >= 26 && hex.height <= 32) { //----------------------// Clear Water
+            if (p_city <= p_litle_city) {
+              hex.print_hex_as_img(80);
+            }
+
+            if (p_city > p_litle_city) { //----------------------// Clear Water + lighthouse
+              hex.print_hex_as_img(93);
+              hex.cities = 4;
+
+            }
+          } else if (hex.height > 32 && hex.height <= 50) { // Plains
+            //----------------------// DESERT
+            if (hex.humidity <= 20) { // Desert
+
+
+              if (p_city < p_litle_city) { // just a desert tile NO cities
+                var random = Math.random() * 10
+                if (random < 5) { //No trees
+                  hex.print_hex_as_img(64);
+                } else if (random >= 5 && random < 9) {
+                  hex.print_hex_as_img(66);
+                } else {
+                  hex.print_hex_as_img(65); // With trees
+                }
+              } else if (p_city >= p_litle_city && p_city <= p_average_city) { // City tile
+                hex.print_hex_as_img(118);
+                hex.cities = 1;
+
+              } else if (p_city > p_average_city && p_city <= p_max_city) { // big city tile
+                hex.print_hex_as_img(119);
+                hex.cities = 2;
+
+              } else if (p_city > p_max_city) {
+                hex.print_hex_as_img(120);
+                hex.cities = 3;
+
+              }
+
+
+
+
+            } else if (hex.humidity > 20 && hex.humidity <= 35) { // Desert with leaves
+              if ((Math.random() * 2) > 1) {
+                hex.print_hex_as_img(17);
+
+              } else if (p_city >= p_litle_city && p_city <= p_average_city) { // City tile
+                hex.print_hex_as_img(118);
+                hex.cities = 1;
+
+              } else if (p_city > p_average_city && p_city <= p_max_city) { // big city tile
+                hex.print_hex_as_img(119);
+                hex.cities = 2;
+
+              } else if (p_city > p_max_city) {
+                hex.print_hex_as_img(120);
+                hex.cities = 3;
+
+              } else {
+                hex.print_hex_as_img(16);
+
+              }
+            }
+            //----------------------// Plains
+            else if (hex.humidity > 35 && hex.humidity <= 80) { // Plain
+
+
+
+              if (p_city < p_litle_city) { // just a plain tile
+                var random = Math.random() * 10;
+
+                if (random < 5) {
+                  hex.print_hex_as_img(1);
+
+                } else if (random >= 5 && random < 9) {
+                  hex.print_hex_as_img(2);
+
+                } else if (random >= 9 && random < 9.9) {
+                  hex.print_hex_as_img(3);
+
+                } else if (random >= 9.9 && random <= 10) {
+                  hex.print_hex_as_img(19);
+                }
+              } else if (p_city >= p_litle_city && p_city <= p_average_city) { // City tile
+                hex.print_hex_as_img(112);
+                hex.cities = 1;
+
+              } else if (p_city > p_average_city && p_city <= p_max_city) { // big city tile
+                hex.print_hex_as_img(113);
+                hex.cities = 2;
+
+              } else if (p_city > p_max_city) { // Fortress
+                hex.print_hex_as_img(114);
+                hex.cities = 3;
+
+              }
+
+
+            } else if (hex.humidity > 80) { // Trees
+              hex.print_hex_as_img(5);
+
+            }
+          } else if (hex.height > 50 && hex.height <= 65) {
+            if (hex.humidity > 70) {
+              hex.print_hex_as_img(23);
+
+            } else {
+
+              var random = Math.random() * 10;
+
+              if (random < 7) {
+                hex.print_hex_as_img(7);
+
+              } else if (random >= 7 && random < 9) {
+                hex.print_hex_as_img(8);
+
+              } else if (random >= 9 && random < 10) {
+                hex.print_hex_as_img(10);
+
+              }
+
+            }
+
+
+
+          } else if (hex.height > 65 && hex.height <= 73) {
+            if (hex.humidity > 70) {
+              hex.print_hex_as_img(50);
+
+            } else {
+              hex.print_hex_as_img(50);
+
+            }
+
+          } else if (hex.height > 73 && hex.height <= 82) {
+
+
+            if (p_city < p_litle_city) { // just a plain tile
+              var random = Math.random() * 10;
+
+              if (random < 5) {
+                hex.print_hex_as_img(56);
+
+              } else if (random >= 5) {
+                hex.print_hex_as_img(51);
+
+
+              }
+            } else if (p_city >= p_litle_city && p_city <= p_average_city) { // City tile
+              hex.print_hex_as_img(115);
+              hex.cities = 1;
+
+            } else if (p_city > p_average_city && p_city <= p_max_city) { // big city tile
+              hex.print_hex_as_img(116);
+              hex.cities = 2;
+
+            } else if (p_city > p_max_city) { // Fortress
+              hex.print_hex_as_img(117);
+              hex.cities = 3;
+
+            }
+
+          } else if (hex.height > 82 && hex.height <= 90) {
+            var random = Math.random() * 10;
+
+            if (random < 5) {
+              hex.print_hex_as_img(49);
+            } else if (random >= 5) {
+              hex.print_hex_as_img(49);
+
+            }
+
+
+          } else if (hex.height > 90 && hex.height <= 92) {
+            hex.print_hex_as_img(51);
+
+          } else if (hex.height > 90 && hex.height <= 95) {
+
+            hex.print_hex_as_img(52);
+
+          } else {
+            hex.print_hex_as_img(96);
+          }
+        }
+      }
+    }
+
+
+    // Print paths
+    function printpath(path) {
+      context2.beginPath();
+
+      context2.setLineDash([5, 15]);
+      for (var i = 0; i < path.length; i++) {
+        context2.lineTo(path[i].x, path[i].y + 50);
+      }
+      context2.lineWidth = 3;
+      context2.lineCap = 'round';
+      context2.strokeStyle = 'black';
+      context2.stroke();
+    }
+
+    // Search for a path
+    function pathfinding(mapgrid, start, end) {
+      var queue = [];
+      var path = [];
+      queue.push(start);
+      var came_from = {};
+
+      var neighbors;
+      var current = start;
+
+      while (queue.length != 0 && current != undefined) {
+
+        current = queue.shift();
+        currentKey = current.r + 'x' + current.q + 'x' + current.s;
+
+        neighbors = current.getNeighbors(mapgrid);
+
+        neighbors.forEach(function(element) {
+          var Key = element.r + 'x' + element.q + 'x' + element.s;
+
+          if (!(Key in came_from)) {
+            if (element.height > 32) {
+              came_from[Key] = {
+                key: currentKey,
+                cell: current
+              }
+              queue.push(element);
+            }
+          }
+        })
+      }
+
+      var path_found = false;
+      currentKey = end.r + 'x' + end.q + 'x' + end.s;
+      current = end;
+      var i = 0;
+
+      while (current !== start) {
+        i++;
+        if (came_from[currentKey] != undefined) {
+          var {
+            key,
+            cell
+          } = came_from[currentKey];
+          path.push(current);
+
+          current = cell;
+          currentKey = key;
+          path_found = true;
+        } 
+        else {
+          path_found = false;
+          console.log("no path found");
+          break;
+        }
+      }
+
+      if (path_found != false) {
+        path.push(start);
+      }
+      return path;
+    }
+
+
+    // Returns all hexagons marked as cities
+    function search_cities(mapgrid) {
+      var cities = [];
+      for (var i = 0; i < mapgrid.length; i++) {
+        for (var j = 0; j < mapgrid[i].length; j++) {
+          if (mapgrid[i][j].cities >= 1) {
+            cities.push(mapgrid[i][j]);
+          }
+        }
+      }
+
+      return cities;
+    }
+
+    // 
+    function create_city_paths(mapgrid){
+      var cities = search_cities(mapgrid); // Getting all the cities
+
+      for (var i = 0; i < cities.length ; i++) {
+        var name = cities_names[Math.round(Math.random() * (cities_names.length-1))];
+        var prefix = cities_prefixes[Math.round(Math.random() * (cities_prefixes.length-1) )];
+
+        cities[i].print_text(prefix +" " +name);
+
+        var path = pathfinding(mapgrid, cities[Math.round(Math.random() * cities.length)], cities[i]);
+        printpath(path);
+      }
+    }
+
+
+
+//-------------- MAIN CODE ---------------------------------------//
+
+    createmap(mapgrid, 60, 28); // Creating a map
+    printmap(mapgrid); // Printing the map
+    create_city_paths(mapgrid); // Print paths and names of cities
+
+    
+
+  </script>
+</body>
+
+</html>
